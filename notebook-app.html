@@ -44,19 +44,19 @@
       padding: 12px 12px 36px;
     }
 
+    /* Captions take whatever height the controls leave. This explicit height
+       only applies once results are showing; during a session the page-lock
+       rules further down size the screen to the window instead. */
     .session-screen {
       height: calc(100vh - 24px);
       height: calc(100svh - 24px);
-      min-height: 600px;
       display: grid;
-      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) auto;
       gap: 12px;
     }
 
     .control-panel {
-      min-height: 0;
       display: grid;
-      grid-template-rows: minmax(32px, auto) minmax(52px, 1fr) minmax(52px, 1fr) minmax(52px, 1fr) auto;
       gap: 10px;
     }
 
@@ -156,16 +156,18 @@
       color: var(--text);
       font: 700 1rem/1.2 inherit;
       cursor: pointer;
-      transition: transform 120ms ease, opacity 120ms ease, border-color 120ms ease;
+      transition: translate 120ms ease, opacity 120ms ease, border-color 120ms ease;
     }
 
+    /* The hover lift uses `translate` rather than `transform` so it never
+       clobbers a button's own positioning transform. */
     button:hover:not(:disabled) {
-      transform: translateY(-1px);
+      translate: 0 -1px;
       border-color: var(--accent);
     }
 
     button:active:not(:disabled) {
-      transform: translateY(0);
+      translate: none;
     }
 
     button:disabled {
@@ -173,72 +175,52 @@
       opacity: 0.45;
     }
 
-    #startStopButton,
-    #captureButton,
-    .position-button {
-      height: 100%;
+    #startStopButton {
+      height: 48px;
       min-height: 0;
     }
 
-    .position-controls {
-      min-height: 0;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+    .capture-hint {
+      margin: 0;
+      font-size: 0.85rem;
+      font-weight: 650;
+      color: var(--muted);
+      text-align: center;
     }
 
-    .position-button {
-      font-size: 0.95rem;
+    .capture-hint kbd {
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font: inherit;
     }
 
+    .capture-hint.ready {
+      color: var(--text);
+    }
+
+    .capture-hint.registered {
+      color: var(--accent);
+    }
+
+    /* A size container so the caption boxes can cap their height to the
+       stage (cqh) and never spill past it into the controls. */
     .subtitle-stage {
       position: relative;
       min-height: 0;
+      container-type: size;
     }
 
-    #captureButton {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-text);
-      font-size: 1.2rem;
-    }
-
+    /* Captions are locked to the top of the stage. */
     .caption-stack {
       position: absolute;
       inset-inline: 0;
-      top: 50%;
+      top: 0;
       width: var(--subtitle-window-width);
       margin-inline: auto;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      transform: translateY(-50%);
-      transition: top 220ms ease, transform 220ms ease;
-    }
-
-    .subtitle-stage[data-anchor="top"] .caption-stack {
-      top: 0;
-      transform: translateY(0);
-    }
-
-    .subtitle-stage[data-anchor="upper"] .caption-stack {
-      top: 25%;
-      transform: translateY(-25%);
-    }
-
-    .subtitle-stage[data-anchor="middle"] .caption-stack {
-      top: 50%;
-      transform: translateY(-50%);
-    }
-
-    .subtitle-stage[data-anchor="lower"] .caption-stack {
-      top: 75%;
-      transform: translateY(-75%);
-    }
-
-    .subtitle-stage[data-anchor="bottom"] .caption-stack {
-      top: 100%;
-      transform: translateY(-100%);
     }
 
     .caption-box {
@@ -255,7 +237,7 @@
       color: inherit;
       font: inherit;
       cursor: pointer;
-      height: min(var(--caption-secondary-height), 80svh);
+      height: min(var(--caption-secondary-height), 32cqh);
       transition: height 200ms ease, border-color 160ms ease, transform 120ms ease;
     }
 
@@ -270,7 +252,7 @@
 
     .caption-stack[data-primary-pane="source"] .caption-box[data-pane="source"],
     .caption-stack[data-primary-pane="translation"] .caption-box[data-pane="translation"] {
-      height: min(var(--caption-primary-height), 80svh);
+      height: min(var(--caption-primary-height), 62cqh);
     }
 
     #subtitle,
@@ -459,7 +441,6 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .caption-stack,
       .caption-box {
         transition: none;
       }
@@ -474,23 +455,15 @@
       .session-screen {
         height: calc(100vh - 16px);
         height: calc(100svh - 16px);
-        min-height: 540px;
         gap: 8px;
       }
 
-      .control-panel,
-      .position-controls {
+      .control-panel {
         gap: 8px;
       }
 
       .caption-box {
-        height: min(var(--caption-secondary-height), 24svh);
         padding: 14px 12px;
-      }
-
-      .caption-stack[data-primary-pane="source"] .caption-box[data-pane="source"],
-      .caption-stack[data-primary-pane="translation"] .caption-box[data-pane="translation"] {
-        height: min(var(--caption-primary-height), 46svh);
       }
 
       .result-comparison {
@@ -525,20 +498,43 @@
       color: var(--accent-text);
     }
 
-    #notebookScreen {
-      padding: 4px 0 40px;
+    /* While the notebook is open, or a capture session is running (no
+       results showing yet), the page is locked to the window height: the
+       screen fills whatever space the nav leaves. The notebook's panels
+       scroll internally; the capture screen's captions shrink to fit. */
+    body:has(#notebookScreen:not([hidden])),
+    body:has(#captureScreen:not([hidden]) #results[hidden]) {
+      height: 100vh;
+      height: 100svh;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .nb-header h1 {
-      margin: 0 0 4px;
-      font-size: 1.35rem;
+    body:has(#captureScreen:not([hidden]) #results[hidden]) main,
+    body:has(#notebookScreen:not([hidden])) main {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 12px;
     }
 
-    .nb-header p {
-      margin: 0 0 16px;
-      color: var(--muted);
-      line-height: 1.5;
-      max-width: 68ch;
+    #notebookScreen:not([hidden]),
+    body:has(#captureScreen:not([hidden]) #results[hidden]) #captureScreen {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    body:has(#captureScreen:not([hidden]) #results[hidden]) .session-screen {
+      flex: 1;
+      min-height: 0;
+      height: auto;
+    }
+
+    /* Notebook controls stay in place on hover/click. */
+    #notebookScreen button:hover:not(:disabled) {
+      translate: none;
     }
 
     .nb-controls {
@@ -546,7 +542,7 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 8px;
-      margin: 16px 0;
+      margin: 0 0 16px;
     }
 
     .nb-tabs {
@@ -597,15 +593,18 @@
     }
 
     .nb-layout {
+      flex: 1;
+      min-height: 0;
       display: grid;
       grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       gap: 16px;
-      align-items: start;
     }
 
     @media (max-width: 800px) {
       .nb-layout {
         grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
       }
     }
 
@@ -614,6 +613,12 @@
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 12px;
+    }
+
+    #nbContent,
+    #nbDetail {
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
 
     .nb-chip-grid {
@@ -1012,7 +1017,7 @@
     <p id="notice" hidden></p>
 
     <section class="session-screen" aria-label="Speech capture controls">
-      <div id="subtitleStage" class="subtitle-stage" data-anchor="middle">
+      <div id="subtitleStage" class="subtitle-stage">
         <div id="captionStack" class="caption-stack" data-primary-pane="source">
           <button
             type="button"
@@ -1054,12 +1059,7 @@
 
         <button id="startStopButton" type="button">Start recognition</button>
 
-        <div class="position-controls" aria-label="Subtitle position controls">
-          <button id="moveUpButton" class="position-button" type="button" aria-label="Move subtitle window upward">▲ Up</button>
-          <button id="moveDownButton" class="position-button" type="button" aria-label="Move subtitle window downward">Down ▼</button>
-        </div>
-
-        <button id="captureButton" type="button" disabled>Capture</button>
+        <p id="captureHint" class="capture-hint" aria-live="polite"></p>
 
         <div id="translatorLoading" class="translator-loading" hidden aria-live="polite">
           <div id="translatorLoadingLabel"></div>
@@ -1069,7 +1069,6 @@
         </div>
       </div>
     </section>
-    <p id="positionStatus" class="sr-only" aria-live="polite"></p>
 
     <section id="results" hidden aria-live="polite">
       <h1>Raw and delay-adjusted captures</h1>
@@ -1083,11 +1082,6 @@
     </div><!-- /captureScreen -->
 
     <div id="notebookScreen" class="screen" hidden>
-      <div class="nb-header">
-        <h1>Notebook</h1>
-        <p id="nbSubtitle">Showing sample notes from a Microeconomics 101 session.</p>
-      </div>
-
       <div class="nb-controls">
         <div class="nb-tabs" id="nbTabs" role="tablist">
           <button type="button" class="nb-tab" data-view="list" aria-pressed="true">All notes</button>
@@ -1119,7 +1113,7 @@
 
     /*
       Every capture uses this fixed post-press delay, and captures are
-      unlimited: the Capture button stays available for as many presses
+      unlimited: the spacebar stays available for as many presses
       as the participant makes during the session.
     */
     const CAPTURE_DELAY_MS = 500;
@@ -1191,13 +1185,6 @@
       }
     };
 
-    const SUBTITLE_ANCHORS = [
-      { id: "top", label: "highest" },
-      { id: "upper", label: "upper" },
-      { id: "middle", label: "centre" },
-      { id: "lower", label: "lower" },
-      { id: "bottom", label: "lowest" }
-    ];
     const SNAPSHOT_INTERVAL_MS = 10;
     const HISTORY_RETENTION_MS = 10000;
 
@@ -1206,14 +1193,10 @@
     const elements = {
       notice: document.getElementById("notice"),
       startStopButton: document.getElementById("startStopButton"),
-      moveUpButton: document.getElementById("moveUpButton"),
-      moveDownButton: document.getElementById("moveDownButton"),
-      subtitleStage: document.getElementById("subtitleStage"),
       captionStack: document.getElementById("captionStack"),
       sourceCaptionBox: document.getElementById("sourceCaptionBox"),
       translationCaptionBox: document.getElementById("translationCaptionBox"),
-      positionStatus: document.getElementById("positionStatus"),
-      captureButton: document.getElementById("captureButton"),
+      captureHint: document.getElementById("captureHint"),
       subtitle: document.getElementById("subtitle"),
       translation: document.getElementById("translation"),
       translatorLoading: document.getElementById("translatorLoading"),
@@ -1231,7 +1214,6 @@
       navNotebookButton: document.getElementById("navNotebookButton"),
       captureScreen: document.getElementById("captureScreen"),
       notebookScreen: document.getElementById("notebookScreen"),
-      nbSubtitle: document.getElementById("nbSubtitle"),
       nbContent: document.getElementById("nbContent"),
       nbDetail: document.getElementById("nbDetail"),
       nbSearchInput: document.getElementById("nbSearchInput"),
@@ -1258,10 +1240,10 @@
       snapshots: [],
       pendingCaptures: new Map(),
       samplingTimer: null,
-      subtitleAnchorIndex: 2,
       translationEnabled: true,
       languageMode: "en",
       sessionStartPerfMs: null,
+      captureReady: false,
       notes: [],
       usingSampleNotes: false,
       selectedNoteId: null,
@@ -1643,30 +1625,6 @@
       return normaliseWhitespace(`${state.translatedFinalText} ${translatedInterim}`);
     }
 
-    function updateSubtitlePosition(announce = false) {
-      const anchor = SUBTITLE_ANCHORS[state.subtitleAnchorIndex];
-      elements.subtitleStage.dataset.anchor = anchor.id;
-      elements.moveUpButton.disabled = state.subtitleAnchorIndex === 0;
-      elements.moveDownButton.disabled = state.subtitleAnchorIndex === SUBTITLE_ANCHORS.length - 1;
-
-      const positionText = `Subtitle position ${state.subtitleAnchorIndex + 1} of ${SUBTITLE_ANCHORS.length}: ${anchor.label}.`;
-      elements.subtitleStage.setAttribute("aria-label", positionText);
-      if (announce) {
-        elements.positionStatus.textContent = positionText;
-      }
-    }
-
-    function shiftSubtitle(direction) {
-      const nextIndex = Math.min(
-        SUBTITLE_ANCHORS.length - 1,
-        Math.max(0, state.subtitleAnchorIndex + direction)
-      );
-
-      if (nextIndex === state.subtitleAnchorIndex) return;
-      state.subtitleAnchorIndex = nextIndex;
-      updateSubtitlePosition(true);
-    }
-
     function setPrimaryPane(pane) {
       if (pane === state.primaryPane) return;
 
@@ -1936,17 +1894,28 @@
       elements.resultsSummary.textContent = "";
       elements.copyJsonButton.disabled = true;
       elements.downloadCsvButton.disabled = true;
-      elements.captureButton.textContent = "Capture";
-      elements.captureButton.disabled = true;
+      setCaptureReady(false);
       renderTranscript();
       renderNotebook();
     }
 
+    // Capturing is triggered by the spacebar; state.captureReady says whether
+    // a press counts right now, and the hint line under the controls shows it.
+    function setCaptureReady(ready) {
+      state.captureReady = ready;
+      elements.captureHint.classList.remove("registered");
+      elements.captureHint.classList.toggle("ready", ready);
+      elements.captureHint.innerHTML = ready
+        ? "Press <kbd>Space</kbd> to capture"
+        : "<kbd>Space</kbd> captures once recognition is running";
+    }
+
     function brieflyConfirmCapturePress() {
-      elements.captureButton.textContent = "Capture registered";
+      elements.captureHint.classList.add("registered");
+      elements.captureHint.textContent = "Capture registered";
       window.setTimeout(() => {
-        if (!state.shouldListen || state.stopRequested) return;
-        elements.captureButton.textContent = "Capture";
+        if (!state.captureReady || state.stopRequested) return;
+        setCaptureReady(true);
       }, 350);
     }
 
@@ -2236,7 +2205,7 @@
       if (!state.shouldListen && !state.recognitionActive) return;
 
       state.stopRequested = true;
-      elements.captureButton.disabled = true;
+      setCaptureReady(false);
       elements.startStopButton.disabled = true;
 
       if (state.pendingCaptures.size > 0) {
@@ -2257,8 +2226,7 @@
 
       elements.startStopButton.disabled = recognitionWasActive;
       elements.startStopButton.textContent = recognitionWasActive ? "Stopping…" : "Start new session";
-      elements.captureButton.disabled = true;
-      elements.captureButton.textContent = "Capture";
+      setCaptureReady(false);
       renderResults();
     }
 
@@ -2288,8 +2256,7 @@
         elements.notice.hidden = true;
         elements.startStopButton.disabled = false;
         elements.startStopButton.textContent = "Stop and show results";
-        elements.captureButton.disabled = false;
-        elements.captureButton.textContent = "Capture";
+        setCaptureReady(true);
       };
 
       state.recognition.onresult = (event) => {
@@ -2337,7 +2304,7 @@
           stopSampling();
           elements.startStopButton.disabled = false;
           elements.startStopButton.textContent = "Start recognition";
-          elements.captureButton.disabled = true;
+          setCaptureReady(false);
         }
       };
 
@@ -2376,9 +2343,27 @@
       }
     });
 
-    elements.moveUpButton.addEventListener("click", () => shiftSubtitle(-1));
-    elements.moveDownButton.addEventListener("click", () => shiftSubtitle(1));
-    elements.captureButton.addEventListener("click", requestCapture);
+    // Spacebar = capture, while the Capture screen is showing and focus isn't
+    // in a text field. Space is swallowed on both keydown and keyup so it
+    // can't also activate a focused button (e.g. stop recognition) or toggle
+    // the translation checkbox.
+    function isSpaceCaptureKey(event) {
+      if (event.code !== "Space" || elements.captureScreen.hidden) return false;
+      if (event.ctrlKey || event.altKey || event.metaKey) return false;
+      const target = event.target;
+      return !(target instanceof HTMLElement && target.closest("input:not([type=checkbox]), textarea, select, [contenteditable]"));
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (!isSpaceCaptureKey(event)) return;
+      event.preventDefault();
+      if (event.repeat || !state.captureReady) return;
+      requestCapture();
+    });
+
+    document.addEventListener("keyup", (event) => {
+      if (isSpaceCaptureKey(event)) event.preventDefault();
+    });
 
     elements.sourceCaptionBox.addEventListener("click", () => setPrimaryPane("source"));
     elements.translationCaptionBox.addEventListener("click", () => setPrimaryPane("translation"));
@@ -2398,7 +2383,6 @@
       showNotice("Microphone access may fail when this file is opened directly. Run it through localhost in Chrome or Edge if necessary.");
     }
 
-    updateSubtitlePosition();
     applyLanguageMode();
     applyTranslationToggle();
     resetSession();
@@ -2699,11 +2683,6 @@
     // and doesn't lose focus.
     function renderNotebook({ includeDetail = true } = {}) {
       const notes = state.notes;
-      elements.nbSubtitle.textContent = state.usingSampleNotes
-        ? "Showing sample notes from a Microeconomics 101 session — press Capture (while recognition is running) to replace these with your own notes, then title and annotate them here."
-        : notes.length === 0
-          ? "No notes yet."
-          : `Showing ${notes.length} note${notes.length === 1 ? "" : "s"} captured this session.`;
 
       if ((!state.selectedNoteId || !notes.some((n) => n.id === state.selectedNoteId)) && notes.length > 0) {
         state.selectedNoteId = notes[0].id;
@@ -2714,7 +2693,7 @@
       if (notes.length === 0) {
         const empty = document.createElement("div");
         empty.className = "nb-empty";
-        empty.textContent = "No notes yet — press Capture while recognition is running to add one.";
+        empty.textContent = "No notes yet — press Space on the Capture screen while recognition is running to add one.";
         elements.nbContent.appendChild(empty);
         elements.nbDetail.replaceChildren();
         return;
@@ -3058,6 +3037,11 @@
 
     function renderNbDetail(notes, sharedCounts, keywordSets) {
       elements.nbDetail.replaceChildren();
+      // Start a newly selected note at the top; re-renders of the same note keep their scroll.
+      if (elements.nbDetail.dataset.noteId !== String(state.selectedNoteId)) {
+        elements.nbDetail.scrollTop = 0;
+        elements.nbDetail.dataset.noteId = String(state.selectedNoteId);
+      }
       const selected = notes.find((n) => n.id === state.selectedNoteId);
       if (!selected) return;
 
