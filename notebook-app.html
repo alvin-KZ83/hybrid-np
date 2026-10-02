@@ -572,6 +572,20 @@
       color: var(--text);
     }
 
+    .nb-file-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .nb-file-button {
+      width: auto;
+      min-height: 0;
+      padding: 7px 12px;
+      font-size: 0.8rem;
+      font-weight: 650;
+      border-radius: 7px;
+    }
+
     .nb-search {
       display: flex;
       align-items: center;
@@ -783,6 +797,10 @@
       font-size: 0.72rem;
       font-weight: 750;
       padding: 8px;
+      /* Always on top, with a panel-coloured ring so the link lines read
+         as starting at its edge rather than running into it. */
+      z-index: 2;
+      box-shadow: 0 0 0 5px var(--panel), 0 6px 18px rgba(0, 0, 0, 0.45);
     }
 
     .nb-ego-node {
@@ -802,6 +820,45 @@
       padding: 6px;
       transform: translate(-50%, -50%);
       cursor: pointer;
+      z-index: 1;
+    }
+
+    .nb-legend {
+      max-width: 420px;
+      margin: 18px auto 0;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .nb-legend .nb-breakdown-label {
+      margin-bottom: 0;
+    }
+
+    .nb-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
+    .nb-legend-dot {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid;
+      border-radius: 999px;
+    }
+
+    .nb-legend-lines {
+      flex: none;
+      width: 30px;
+      height: 16px;
+      color: var(--text);
     }
 
     .nb-breakdown-section {
@@ -815,6 +872,16 @@
       color: var(--muted);
       margin-bottom: 8px;
       text-transform: uppercase;
+    }
+
+    .nb-term-definition {
+      font-size: 0.82rem;
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .nb-term-definition-text {
+      color: var(--muted);
     }
 
     .nb-term-row {
@@ -940,6 +1007,14 @@
 
     .nb-detail-label {
       margin-top: 18px;
+    }
+
+    .nb-sentence-context {
+      display: grid;
+      gap: 4px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #0d1218;
     }
 
     .nb-mini-button {
@@ -1092,6 +1167,11 @@
           <button type="button" class="nb-tab" data-view="breakdown" aria-pressed="false">Breakdown</button>
           <button type="button" id="nbRefineButton" class="nb-ai-button" title="Use Claude to suggest titles, keywords, ideas and explanations for every note">✨ Refine with AI</button>
         </div>
+        <div class="nb-file-actions">
+          <button type="button" id="nbDownloadButton" class="nb-file-button" title="Save every note, edit and annotation to a file you can open again later">⬇ Download notebook</button>
+          <button type="button" id="nbOpenButton" class="nb-file-button" title="Continue a notebook you downloaded earlier">⬆ Open notebook</button>
+          <input type="file" id="nbOpenInput" accept=".json,application/json" hidden />
+        </div>
         <div class="nb-search">
           <input type="text" id="nbSearchInput" placeholder="Search notes…" aria-label="Search notes" />
         </div>
@@ -1218,6 +1298,9 @@
       nbDetail: document.getElementById("nbDetail"),
       nbSearchInput: document.getElementById("nbSearchInput"),
       nbRefineButton: document.getElementById("nbRefineButton"),
+      nbDownloadButton: document.getElementById("nbDownloadButton"),
+      nbOpenButton: document.getElementById("nbOpenButton"),
+      nbOpenInput: document.getElementById("nbOpenInput"),
       nbAiStatus: document.getElementById("nbAiStatus")
     };
 
@@ -1244,13 +1327,41 @@
       languageMode: "en",
       sessionStartPerfMs: null,
       captureReady: false,
+      nbSessionOffsetS: 0,
+      // JSON of the notes as last downloaded or opened, to tell whether
+      // closing the page would lose changes.
+      nbSavedJson: "[]",
       notes: [],
       usingSampleNotes: false,
       selectedNoteId: null,
       notebookView: "list",
       notebookQuery: "",
-      nbActiveBin: null
+      nbActiveBin: null,
+      // Every meaningful interaction, for analysis. It belongs to the
+      // notebook: saved in downloaded files, restored (and appended to)
+      // when a file is opened. See logEvent().
+      interactionLog: []
     };
+
+    /* ---------- Interaction log ----------
+       Each entry: { t: ISO time, ms: ms since this page load, session: id of
+       this page load, screen: "capture" | "notebook", type, ...details }.
+       A notebook used over several days has entries from several sessions;
+       group by `session` and order by `t`. Typed text is recorded as
+       lengths, except titles, search queries and annotation labels. */
+    const LOG_SESSION_ID = window.crypto?.randomUUID?.()
+      || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+    function logEvent(type, details = {}) {
+      state.interactionLog.push({
+        t: new Date().toISOString(),
+        ms: Math.round(performance.now()),
+        session: LOG_SESSION_ID,
+        screen: document.getElementById("notebookScreen")?.hidden === false ? "notebook" : "capture",
+        type,
+        ...details
+      });
+    }
 
     function normaliseWhitespace(text) {
       return text.replace(/\s+/g, " ").trim();
@@ -1655,6 +1766,7 @@
 
     elements.translationToggle.addEventListener("change", () => {
       state.translationEnabled = elements.translationToggle.checked;
+      logEvent("translation_toggled", { enabled: state.translationEnabled });
       applyTranslationToggle();
     });
 
@@ -1697,6 +1809,7 @@
         if (button.dataset.lang === state.languageMode) return;
 
         state.languageMode = button.dataset.lang;
+        logEvent("speech_language_changed", { language: state.languageMode });
         applyLanguageMode();
         // Inside the click, so a first-time language pack download for the
         // new pair counts as user-initiated.
@@ -1877,13 +1990,12 @@
       state.captures = [];
       state.snapshots = [];
       state.sessionStartPerfMs = null;
-      state.notes = [];
-      state.usingSampleNotes = false;
-      state.selectedNoteId = null;
-      state.nbActiveBin = null;
-      // Note ids (c1, c2, ...) restart each session. An AI refinement still
-      // in flight checks that state.notes is the same array it started
-      // with, so its results can't land on this session's reused ids.
+      // The notebook outlives sessions: a new session's captures are added
+      // to the open notebook (e.g. one reopened from a saved file), placed
+      // on its timeline after everything already in it.
+      state.nbSessionOffsetS = state.usingSampleNotes
+        ? 0
+        : Math.max(0, ...state.notes.map((n) => n.elapsedS));
 
       state.pendingCaptures.forEach(({ timerId }) => window.clearTimeout(timerId));
       state.pendingCaptures.clear();
@@ -1961,6 +2073,15 @@
       };
       state.captures.push(capture);
       addNoteFromCapture(capture, pending);
+      logEvent("capture_completed", {
+        trial: capture.trial,
+        noteId: state.notes[state.notes.length - 1].id,
+        pane,
+        rawContainsTarget: capture.rawContainsTarget,
+        adjustedContainsTarget: capture.adjustedContainsTarget,
+        rawAndAdjustedDiffer: capture.rawPhrase !== capture.adjustedPhrase,
+        snapshotErrorMs: capture.snapshotErrorMs
+      });
 
       state.pendingCaptures.delete(captureId);
 
@@ -1986,6 +2107,13 @@
       const rawTranslatedFullText = getFullRunningTranslatedText();
       const primaryPaneAtPress = state.primaryPane;
       recordSnapshot(pressPerfMs);
+      logEvent("capture_pressed", {
+        trial,
+        pane: primaryPaneAtPress,
+        offsetMs,
+        sessionElapsedMs: state.sessionStartPerfMs === null ? null : Math.round(pressPerfMs - state.sessionStartPerfMs),
+        visibleTextLength: (primaryPaneAtPress === "translation" ? rawTranslatedPhrase : rawPhrase).length
+      });
 
       const timerId = window.setTimeout(() => {
         completeCapture(captureId);
@@ -2205,6 +2333,7 @@
       if (!state.shouldListen && !state.recognitionActive) return;
 
       state.stopRequested = true;
+      logEvent("recognition_stop_requested", { captures: state.captures.length, pendingCaptures: state.pendingCaptures.size });
       setCaptureReady(false);
       elements.startStopButton.disabled = true;
 
@@ -2250,6 +2379,13 @@
 
       state.recognition.onstart = () => {
         state.recognitionActive = true;
+        // The browser ends recognition periodically and it's restarted
+        // automatically; those restarts are logged as such.
+        logEvent("recognition_started", {
+          restart: state.sessionStartPerfMs !== null,
+          language: currentMode().recognitionLang,
+          translationEnabled: state.translationEnabled
+        });
         if (state.sessionStartPerfMs === null) {
           state.sessionStartPerfMs = performance.now();
         }
@@ -2294,6 +2430,7 @@
           "aborted": "Recognition was stopped."
         };
 
+        logEvent("recognition_error", { error: event.error });
         if (event.error !== "no-speech" && event.error !== "aborted") {
           showNotice(messages[event.error] || `Recognition error: ${event.error}`);
         }
@@ -2311,6 +2448,7 @@
       state.recognition.onend = () => {
         state.recognitionActive = false;
         syncLanguageSwitchDisabled();
+        logEvent("recognition_ended", { willRestart: state.shouldListen && !state.stopRequested });
 
         if (state.shouldListen && !state.stopRequested) {
           window.setTimeout(() => {
@@ -2335,6 +2473,7 @@
       if (state.shouldListen || state.recognitionActive) {
         requestStop();
       } else {
+        logEvent("recognition_start_requested", { language: currentMode().recognitionLang, translationEnabled: state.translationEnabled });
         // Translator.create() needs a user gesture to prompt a model
         // download the first time — calling it here, directly inside the
         // click handler, is what makes that gesture count.
@@ -2357,7 +2496,12 @@
     document.addEventListener("keydown", (event) => {
       if (!isSpaceCaptureKey(event)) return;
       event.preventDefault();
-      if (event.repeat || !state.captureReady) return;
+      if (event.repeat) return;
+      if (!state.captureReady) {
+        // A press that didn't count — e.g. before recognition started.
+        logEvent("capture_ignored", { reason: state.stopRequested ? "stopping" : "recognition_not_running" });
+        return;
+      }
       requestCapture();
     });
 
@@ -2365,11 +2509,21 @@
       if (isSpaceCaptureKey(event)) event.preventDefault();
     });
 
-    elements.sourceCaptionBox.addEventListener("click", () => setPrimaryPane("source"));
-    elements.translationCaptionBox.addEventListener("click", () => setPrimaryPane("translation"));
+    [["source", elements.sourceCaptionBox], ["translation", elements.translationCaptionBox]].forEach(([pane, box]) => {
+      box.addEventListener("click", () => {
+        if (pane !== state.primaryPane) logEvent("primary_pane_changed", { pane });
+        setPrimaryPane(pane);
+      });
+    });
 
-    elements.copyJsonButton.addEventListener("click", copyResultsAsJson);
-    elements.downloadCsvButton.addEventListener("click", downloadResultsAsCsv);
+    elements.copyJsonButton.addEventListener("click", () => {
+      logEvent("results_copied_json", { captures: state.captures.length });
+      copyResultsAsJson();
+    });
+    elements.downloadCsvButton.addEventListener("click", () => {
+      logEvent("results_downloaded_csv", { captures: state.captures.length });
+      downloadResultsAsCsv();
+    });
 
     window.addEventListener("beforeunload", () => {
       stopSampling();
@@ -2521,7 +2675,24 @@
       return Object.values(groups);
     }
 
+    // Clusters are the AI's topics once "Refine with AI" has assigned any:
+    // notes with the same topic (ignoring case) form one cluster, and a note
+    // without a topic yet (captured since the last refine) stands alone
+    // until the next refine. Before any refine, clusters come from chaining
+    // notes whose link strength is at least 2.
+    function nbClusterNotes(notes, sharedCounts) {
+      if (!notes.some((n) => n.topic)) return nbComputeClusters(notes, sharedCounts, 2);
+      const groups = new Map();
+      notes.forEach((n) => {
+        const key = n.topic ? `topic:${n.topic.toLocaleLowerCase()}` : `note:${n.id}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(n);
+      });
+      return [...groups.values()];
+    }
+
     function nbClusterLabel(group, keywordSets) {
+      if (group[0].topic) return group[0].topic;
       const freq = {};
       group.forEach((n) => keywordSets[n.id].forEach((w) => (freq[w] = (freq[w] || 0) + 1)));
       const common = Object.entries(freq).filter(([, c]) => c >= 2);
@@ -2537,27 +2708,26 @@
     const NB_CLUSTER_PALETTE = ["#ffb454", "#70b7ff", "#7ee0a8", "#c8a2ff", "#ff9ecf", "#ffd166"];
     const NB_UNCLUSTERED_COLOR = "#5b6570";
 
-    // A small built-in glossary — instant, zero network calls. Matching
-    // reuses nbTokenize() on both sides, so it stays correct even if the
-    // stemming above changes. Narrow by design (this session's subject);
-    // swap in your own list for a different course.
-    const NB_GLOSSARY = [
-      { term: "scarcity", definition: "Not having enough of a resource to satisfy every want — the basic problem economics starts from." },
-      { term: "trade-off", definition: "Giving up one thing to get another. Almost every choice involves one." },
-      { term: "opportunity cost", definition: "The value of the next-best option you gave up by choosing what you chose." },
-      { term: "constrained optimization", definition: "Making the best choice possible within real limits — time, money, or other resources you can't exceed." },
-      { term: "model", definition: "A simplified description of how two or more things relate, used to explain or predict." },
-      { term: "assumptions", definition: "Simplifying rules a model relies on so it stays solvable and easy to teach, even if imperfectly realistic." },
-      { term: "parsimonious", definition: "As simple as possible while still explaining what it needs to." },
-      { term: "supply and demand", definition: "The two forces — how much of something exists, and how much people want it — that together set its price." },
-      { term: "paradox", definition: "A situation that seems to contradict itself but makes sense once you see what's really driving it." },
-      { term: "social science", definition: "A field studying human behavior and society, without the fixed, universal laws of natural sciences." },
-      { term: "isolation", definition: "Looking at one factor alone, cut off from the others that actually affect it." }
-    ];
+    // Key terms are a note's own keywords (its Keyword/Tag annotations, the
+    // user's and the AI's). Definitions are written by the AI for that
+    // specific note and kept on it as note.termDefinitions: [{ term,
+    // definition }], so they're saved with the notebook. A definition stays
+    // attached to its term even if the keyword is later removed, and shows
+    // again if the keyword comes back.
+    function nbTermDefinition(note, term) {
+      const key = term.toLocaleLowerCase();
+      return (note.termDefinitions || []).find((d) => d.term.toLocaleLowerCase() === key)?.definition || "";
+    }
 
-    function nbGlossaryMatches(note, keywordSets) {
-      const nodeKeywords = keywordSets[note.id];
-      return NB_GLOSSARY.filter((g) => nbTokenize(g.term).some((t) => nodeKeywords.has(t)));
+    function nbSetTermDefinitions(note, definitions) {
+      const incoming = definitions
+        .map((d) => ({ term: normaliseWhitespace(d.term), definition: normaliseWhitespace(d.definition) }))
+        .filter((d) => d.term && d.definition);
+      const replaced = new Set(incoming.map((d) => d.term.toLocaleLowerCase()));
+      note.termDefinitions = [
+        ...(note.termDefinitions || []).filter((d) => !replaced.has(d.term.toLocaleLowerCase())),
+        ...incoming
+      ];
     }
 
     function nbFormatElapsed(seconds) {
@@ -2595,45 +2765,91 @@
         state.notes = [];
         state.usingSampleNotes = false;
       }
-      const elapsedS = state.sessionStartPerfMs
+      const elapsedS = state.nbSessionOffsetS + (state.sessionStartPerfMs
         ? (pending.pressPerfMs - state.sessionStartPerfMs) / 1000
-        : 0;
+        : 0);
+      // Numbering continues from the notebook's highest capture, so notes
+      // added in a later session never reuse an id.
+      const number = 1 + Math.max(0, ...state.notes.map((n) => Number(/^c(\d+)$/.exec(n.id)?.[1]) || 0));
       const phrase = capture.adjustedPhrase || capture.rawPhrase || "(no caption text was visible)";
+      // Sentence context comes from the same snapshot the phrase did. It's
+      // fixed metadata — kept even if the phrase is edited — and is sent
+      // along when the note is refined with AI.
+      const usedAdjusted = Boolean(capture.adjustedPhrase);
       state.notes.push({
-        id: `c${capture.trial}`,
+        previousSentence: usedAdjusted ? capture.adjustedPreviousSentence : capture.rawPreviousSentence,
+        currentSentence: usedAdjusted ? capture.adjustedCurrentSentence : capture.rawCurrentSentence,
+        id: `c${number}`,
+        capturedAt: new Date().toISOString(),
         timeLabel: nbFormatElapsed(elapsedS),
         elapsedS,
-        concept: `Capture ${capture.trial}`,
+        concept: `Capture ${number}`,
         phrase,
         originalPhrase: phrase,
         annotations: [],
         pane: capture.pane,
         targetPhrase: capture.targetPhrase,
         rawContainsTarget: capture.rawContainsTarget,
-        adjustedContainsTarget: capture.adjustedContainsTarget
+        adjustedContainsTarget: capture.adjustedContainsTarget,
+        // The full capture record (raw vs delay-adjusted text, both sentence
+        // contexts, timing), kept with the note so it survives saving and
+        // reopening. `session` matches the interaction log's session id.
+        capture: { ...capture, session: LOG_SESSION_ID }
       });
+    }
+
+    /* ---------- AI-judged links ----------
+       "Refine with AI" gives each note aiLinks: [{ id, strength 1–3,
+       reason }] — the other notes it judged related, and how. A pair of
+       notes that have both been refined is linked only by that judgement
+       (either direction counts, the stronger wins). A pair where either
+       note is newer than the last refine falls back to word overlap until
+       the next refine, so fresh captures aren't left unconnected. */
+    // AI strength 1/2/3 on the same scale as word-overlap link strength.
+    const NB_AI_LINK_STRENGTH = { 1: 1, 2: 3, 3: 5 };
+
+    function nbIsAiJudged(a, b) {
+      return Array.isArray(a.aiLinks) && Array.isArray(b.aiLinks);
+    }
+
+    function nbAiLink(a, b) {
+      const candidates = [
+        a.aiLinks.find((l) => l.id === b.id),
+        b.aiLinks.find((l) => l.id === a.id)
+      ].filter(Boolean);
+      return candidates.sort((x, y) => y.strength - x.strength)[0] || null;
+    }
+
+    // Why two notes are linked, for hover text and related-note rows.
+    function nbLinkWhy(a, b, keywordSets) {
+      if (nbIsAiJudged(a, b)) return nbAiLink(a, b)?.reason || "";
+      return `shares: ${nbSharedWords(keywordSets[a.id], keywordSets[b.id]).join(", ")}`;
     }
 
     function nbBuildGraph(notes) {
       const keywordSets = {};
       notes.forEach((n) => (keywordSets[n.id] = nbKeywordSet(n)));
-      // sharedCounts holds link strength, not a raw count: a shared user
-      // keyword weighs NB_USER_KEYWORD_WEIGHT, a shared automatic word 1.
+      // sharedCounts holds link strength, not a raw count: an AI-judged
+      // link maps through NB_AI_LINK_STRENGTH; otherwise a shared user
+      // keyword weighs NB_USER_KEYWORD_WEIGHT and a shared automatic word 1.
       const sharedCounts = {};
       notes.forEach((a) => {
         sharedCounts[a.id] = {};
         notes.forEach((b) => {
           if (a.id === b.id) return;
-          sharedCounts[a.id][b.id] = nbLinkStrength(nbSharedWords(keywordSets[a.id], keywordSets[b.id]));
+          sharedCounts[a.id][b.id] = nbIsAiJudged(a, b)
+            ? NB_AI_LINK_STRENGTH[nbAiLink(a, b)?.strength] || 0
+            : nbLinkStrength(nbSharedWords(keywordSets[a.id], keywordSets[b.id]));
         });
       });
       return { keywordSets, sharedCounts };
     }
 
     function nbNeighborsOf(id, notes, sharedCounts, keywordSets) {
+      const n0 = notes.find((n) => n.id === id);
       return notes
         .filter((n) => n.id !== id)
-        .map((n) => ({ node: n, shared: sharedCounts[id][n.id], words: nbSharedWords(keywordSets[id], keywordSets[n.id]) }))
+        .map((n) => ({ node: n, shared: sharedCounts[id][n.id], why: nbLinkWhy(n0, n, keywordSets) }))
         .filter((x) => x.shared >= 1)
         .sort((a, b) => b.shared - a.shared)
         .slice(0, 6);
@@ -2643,10 +2859,20 @@
       const n0 = notes.find((n) => n.id === id);
       return notes
         .filter((n) => n.id !== id && n.elapsedS < n0.elapsedS)
-        .map((n) => ({ node: n, shared: sharedCounts[id][n.id], words: nbSharedWords(keywordSets[id], keywordSets[n.id]) }))
+        .map((n) => ({ node: n, shared: sharedCounts[id][n.id], why: nbLinkWhy(n0, n, keywordSets) }))
         .filter((x) => x.shared >= 1)
         .sort((a, b) => b.shared - a.shared)
         .slice(0, 4);
+    }
+
+    // Selecting a note from anywhere in the notebook; `via` records which
+    // control was used (chip, timeline dot, connections node, related row).
+    function nbSelectNote(noteId, via) {
+      if (noteId !== state.selectedNoteId) {
+        logEvent("note_selected", { noteId, via, view: state.notebookView });
+      }
+      state.selectedNoteId = noteId;
+      renderNotebook();
     }
 
     function nbMatches(note, query) {
@@ -2670,10 +2896,7 @@
       concept.className = "nb-chip-concept";
       concept.textContent = note.concept;
       btn.append(dot, time, concept);
-      btn.addEventListener("click", () => {
-        state.selectedNoteId = note.id;
-        renderNotebook();
-      });
+      btn.addEventListener("click", () => nbSelectNote(note.id, "chip"));
       return btn;
     }
 
@@ -2684,6 +2907,8 @@
     function renderNotebook({ includeDetail = true } = {}) {
       const notes = state.notes;
 
+      elements.nbDownloadButton.disabled = state.usingSampleNotes || notes.length === 0;
+
       if ((!state.selectedNoteId || !notes.some((n) => n.id === state.selectedNoteId)) && notes.length > 0) {
         state.selectedNoteId = notes[0].id;
       }
@@ -2693,14 +2918,14 @@
       if (notes.length === 0) {
         const empty = document.createElement("div");
         empty.className = "nb-empty";
-        empty.textContent = "No notes yet — press Space on the Capture screen while recognition is running to add one.";
+        empty.textContent = "No notes yet — press Space on the Capture screen while recognition is running to add one, or open a saved notebook.";
         elements.nbContent.appendChild(empty);
         elements.nbDetail.replaceChildren();
         return;
       }
 
       const { keywordSets, sharedCounts } = nbBuildGraph(notes);
-      const rawClusters = nbComputeClusters(notes, sharedCounts, 2);
+      const rawClusters = nbClusterNotes(notes, sharedCounts);
       const clusterGroups = rawClusters.filter((g) => g.length > 1).sort((a, b) => b.length - a.length);
       const singles = rawClusters.filter((g) => g.length === 1).map((g) => g[0]);
       const nodeColor = {};
@@ -2764,10 +2989,7 @@
         dot.style.left = `${(n.elapsedS / maxElapsed) * 100}%`;
         dot.style.background = nodeColor[n.id] || "var(--accent)";
         dot.style.opacity = nbMatches(n, state.notebookQuery) ? "1" : "0.25";
-        dot.addEventListener("click", () => {
-          state.selectedNoteId = n.id;
-          renderNotebook();
-        });
+        dot.addEventListener("click", () => nbSelectNote(n.id, "timeline_dot"));
         timeline.appendChild(dot);
       });
 
@@ -2806,6 +3028,7 @@
         bar.title = `${nbFormatElapsed(b.start)}–${nbFormatElapsed(b.start + binSize)}: ${b.notes.length} note(s)`;
         bar.addEventListener("click", () => {
           state.nbActiveBin = state.nbActiveBin === b.i ? null : b.i;
+          logEvent("density_bin_toggled", { bin: b.i, startS: b.start, notes: b.notes.length, selected: state.nbActiveBin === b.i });
           renderNotebook();
         });
         barsWrap.appendChild(bar);
@@ -2877,7 +3100,7 @@
         card.style.cssText = "border:1px dashed var(--border);margin-top:12px;";
         const head = document.createElement("div");
         head.style.cssText = "display:flex;justify-content:space-between;margin-bottom:8px;";
-        head.innerHTML = `<span style="color:var(--muted);font-weight:750;font-size:0.75rem;">UNCLUSTERED — didn't share &ge;2 keywords with anything</span><span style="color:var(--muted);font-size:0.75rem;">${singles.length} notes</span>`;
+        head.innerHTML = `<span style="color:var(--muted);font-weight:750;font-size:0.75rem;">UNCLUSTERED — not grouped with any other note yet</span><span style="color:var(--muted);font-size:0.75rem;">${singles.length} notes</span>`;
         card.appendChild(head);
         const chipGrid = document.createElement("div");
         chipGrid.className = "nb-chip-grid";
@@ -2887,6 +3110,75 @@
       }
 
       elements.nbContent.appendChild(wrap);
+    }
+
+    // Line weight for a link of the given strength. Capped: user keywords
+    // push link strength well past a few shared words.
+    const NB_LINK_STRENGTH_CAP = 5;
+
+    function nbLinkStroke(shared) {
+      const strength = Math.min(shared, NB_LINK_STRENGTH_CAP);
+      return { width: 0.6 + strength * 0.5, opacity: 0.35 + strength * 0.12 };
+    }
+
+    // A dark fill tinted with a cluster colour, for nodes that show their
+    // cluster without competing with the solid-filled selected note.
+    function nbClusterTint(color) {
+      return `color-mix(in srgb, ${color} 22%, #0d1218)`;
+    }
+
+    // The same three-item key for every note: solid = selected, ringed =
+    // connected, line weight = link strength. Swatches use the selected
+    // note's actual cluster colour.
+    function nbConnectionsLegend(selectedColor) {
+      const legend = document.createElement("div");
+      legend.className = "nb-legend";
+
+      const heading = document.createElement("div");
+      heading.className = "nb-breakdown-label";
+      heading.textContent = "How to read this";
+      legend.appendChild(heading);
+
+      const item = (swatch, text) => {
+        const row = document.createElement("div");
+        row.className = "nb-legend-item";
+        const label = document.createElement("span");
+        label.textContent = text;
+        row.append(swatch, label);
+        legend.appendChild(row);
+      };
+      const dot = (fill, ring) => {
+        const el = document.createElement("span");
+        el.className = "nb-legend-dot";
+        el.style.background = fill;
+        el.style.borderColor = ring;
+        return el;
+      };
+
+      item(dot(selectedColor, selectedColor), "Solid circle — the selected note.");
+      item(dot(nbClusterTint(selectedColor), selectedColor), "Ringed circle — a connected note. Colours match the Clusters tab.");
+
+      // Line thickness: sample lines at weak, medium and strongest.
+      const svgNS = "http://www.w3.org/2000/svg";
+      const samples = document.createElementNS(svgNS, "svg");
+      samples.setAttribute("viewBox", "0 0 30 16");
+      samples.setAttribute("class", "nb-legend-lines");
+      samples.setAttribute("aria-hidden", "true");
+      [1, 3, NB_LINK_STRENGTH_CAP].forEach((shared, i) => {
+        const { width, opacity } = nbLinkStroke(shared);
+        const line = document.createElementNS(svgNS, "line");
+        line.setAttribute("x1", 1);
+        line.setAttribute("x2", 29);
+        line.setAttribute("y1", 2.5 + i * 5.5);
+        line.setAttribute("y2", 2.5 + i * 5.5);
+        line.setAttribute("stroke", "currentColor");
+        line.setAttribute("stroke-width", width);
+        line.setAttribute("opacity", opacity);
+        samples.appendChild(line);
+      });
+      item(samples, "Line thickness — how strongly the two notes are related.");
+
+      return legend;
     }
 
     function renderNbConnections(notes, sharedCounts, keywordSets, nodeColor) {
@@ -2903,11 +3195,8 @@
       const ego = document.createElement("div");
       ego.className = "nb-ego";
 
-      const center = document.createElement("div");
-      center.className = "nb-ego-center";
-      center.textContent = selected.concept;
-      ego.appendChild(center);
-
+      // Layered bottom to top: link lines, neighbour nodes, then the
+      // selected note, so nothing is ever drawn over the centre.
       const svgNS = "http://www.w3.org/2000/svg";
       const svg = document.createElementNS(svgNS, "svg");
       svg.setAttribute("viewBox", "0 0 100 100");
@@ -2925,10 +3214,9 @@
         line.setAttribute("x2", x);
         line.setAttribute("y2", y);
         line.setAttribute("stroke", nodeColor[nb.node.id] || "#5b6570");
-        // Capped: user keywords push link strength well past a few shared words.
-        const strength = Math.min(nb.shared, 5);
-        line.setAttribute("stroke-width", 0.6 + strength * 0.5);
-        line.setAttribute("opacity", 0.35 + strength * 0.12);
+        const { width, opacity } = nbLinkStroke(nb.shared);
+        line.setAttribute("stroke-width", width);
+        line.setAttribute("opacity", opacity);
         svg.appendChild(line);
 
         const node = document.createElement("button");
@@ -2936,29 +3224,40 @@
         node.className = "nb-ego-node";
         node.style.left = `${x}%`;
         node.style.top = `${y}%`;
-        node.style.border = `2px solid ${nodeColor[nb.node.id] || "var(--border)"}`;
-        node.title = `Shares: ${nb.words.join(", ")}`;
+        const color = nodeColor[nb.node.id] || NB_UNCLUSTERED_COLOR;
+        node.style.border = `2px solid ${color}`;
+        node.style.background = nbClusterTint(color);
+        node.title = nb.why;
         node.textContent = nb.node.concept;
-        node.addEventListener("click", () => {
-          state.selectedNoteId = nb.node.id;
-          renderNotebook();
-        });
+        node.addEventListener("click", () => nbSelectNote(nb.node.id, "connections_node"));
         ego.appendChild(node);
       });
+
+      // The selected note is filled with its own cluster's colour, so it
+      // visibly belongs with same-coloured neighbours; differently coloured
+      // neighbours are links into other clusters.
+      const center = document.createElement("div");
+      center.className = "nb-ego-center";
+      center.textContent = selected.concept;
+      const centerColor = nodeColor[selected.id] || NB_UNCLUSTERED_COLOR;
+      center.style.background = centerColor;
+      center.style.color = centerColor === NB_UNCLUSTERED_COLOR ? "var(--text)" : "#0b0f14";
+      ego.appendChild(center);
 
       wrap.appendChild(ego);
 
       if (neighbors.length === 0) {
         const empty = document.createElement("div");
         empty.className = "nb-empty";
-        empty.textContent = `No other note shares a significant word with "${selected.concept}" yet.`;
+        empty.textContent = `No other note is connected to "${selected.concept}" yet.`;
         wrap.appendChild(empty);
       } else {
+        wrap.appendChild(nbConnectionsLegend(centerColor));
         const list = document.createElement("div");
         list.style.cssText = "margin-top:16px;font-size:0.78rem;color:var(--muted);display:grid;gap:6px;";
         neighbors.forEach((nb) => {
           const row = document.createElement("div");
-          row.textContent = `${selected.concept} ↔ ${nb.node.concept} (shares: ${nb.words.join(", ")})`;
+          row.textContent = `${selected.concept} ↔ ${nb.node.concept}${nb.why ? ` — ${nb.why}` : ""}`;
           list.appendChild(row);
         });
         wrap.appendChild(list);
@@ -3003,34 +3302,42 @@
         buildsOnSection.appendChild(p);
       } else {
         builtOn.forEach((b) => {
-          buildsOnSection.appendChild(nbRelatedRow(b.node, `${b.node.timeLabel} — ${b.node.concept}`, b.words));
+          buildsOnSection.appendChild(nbRelatedRow(b.node, `${b.node.timeLabel} — ${b.node.concept}`, b.why));
         });
       }
       wrap.appendChild(buildsOnSection);
 
-      const glossarySection = document.createElement("div");
-      glossarySection.className = "nb-breakdown-section";
-      const glossaryLabel = document.createElement("div");
-      glossaryLabel.className = "nb-breakdown-label";
-      glossaryLabel.textContent = "Key terms — built-in glossary, no network call";
-      glossarySection.appendChild(glossaryLabel);
+      const termsSection = document.createElement("div");
+      termsSection.className = "nb-breakdown-section";
+      const termsLabel = document.createElement("div");
+      termsLabel.className = "nb-breakdown-label";
+      termsLabel.textContent = "Key terms — this note's keywords";
+      termsSection.appendChild(termsLabel);
+      const terms = [...nbUserKeywords(selected.annotations)];
 
-      const hits = nbGlossaryMatches(selected, keywordSets);
-      if (hits.length === 0) {
+      if (terms.length === 0) {
         const p = document.createElement("div");
         p.className = "nb-empty";
         p.style.cssText = "padding:0;text-align:left;";
-        p.textContent = "Nothing in the built-in glossary matches this note yet.";
-        glossarySection.appendChild(p);
+        p.textContent = "No keywords on this note yet — add a Keyword annotation in the details panel, or use Refine with AI to suggest some.";
+        termsSection.appendChild(p);
       } else {
-        hits.forEach((g) => {
+        terms.forEach((term) => {
+          // Built from text nodes: terms are user-typed and definitions come
+          // from the AI, so neither is ever parsed as HTML.
           const row = document.createElement("div");
-          row.style.cssText = "font-size:0.82rem;margin-bottom:8px;line-height:1.5;";
-          row.innerHTML = `<strong>${g.term}</strong> — <span style="color:var(--muted);">${g.definition}</span>`;
-          glossarySection.appendChild(row);
+          row.className = "nb-term-definition";
+          const termEl = document.createElement("strong");
+          termEl.textContent = term;
+          const definition = nbTermDefinition(selected, term);
+          const definitionEl = document.createElement("span");
+          definitionEl.className = definition ? "nb-term-definition-text" : "nb-term-definition-text blank";
+          definitionEl.textContent = definition || "Not defined yet";
+          row.append(termEl, " — ", definitionEl);
+          termsSection.appendChild(row);
         });
       }
-      wrap.appendChild(glossarySection);
+      wrap.appendChild(termsSection);
 
       elements.nbContent.appendChild(wrap);
     }
@@ -3059,7 +3366,10 @@
       title.addEventListener("input", () => {
         selected.concept = title.value.trim() || "Untitled note";
       });
-      title.addEventListener("change", nbCommitEdit);
+      title.addEventListener("change", () => {
+        logEvent("note_title_edited", { noteId: selected.id, title: selected.concept });
+        nbCommitEdit();
+      });
       elements.nbDetail.appendChild(title);
 
       const transcriptLabel = document.createElement("div");
@@ -3080,12 +3390,52 @@
         selected.phrase = transcript.value;
         revert.hidden = selected.phrase === selected.originalPhrase;
       });
-      transcript.addEventListener("change", nbCommitEdit);
+      transcript.addEventListener("change", () => {
+        logEvent("captured_text_edited", {
+          noteId: selected.id,
+          length: selected.phrase.length,
+          originalLength: selected.originalPhrase.length,
+          differsFromCapture: selected.phrase !== selected.originalPhrase
+        });
+        nbCommitEdit();
+      });
       revert.addEventListener("click", () => {
+        logEvent("captured_text_reverted", { noteId: selected.id });
         selected.phrase = selected.originalPhrase;
         renderNotebook();
       });
       elements.nbDetail.append(transcript, revert);
+
+      // Sample notes have no sentence context, so the section only appears
+      // for real captures.
+      if (selected.currentSentence !== undefined) {
+        const contextLabel = document.createElement("div");
+        contextLabel.className = "nb-breakdown-label nb-detail-label";
+        contextLabel.textContent = "Sentence context";
+        const context = document.createElement("div");
+        context.className = "nb-sentence-context";
+        const makeContextLine = (label, sentenceText) => {
+          const line = document.createElement("p");
+          line.className = "context-line";
+          const labelSpan = document.createElement("span");
+          labelSpan.className = "context-label";
+          labelSpan.textContent = `${label}: `;
+          const textSpan = document.createElement("span");
+          if (sentenceText) {
+            textSpan.textContent = sentenceText;
+          } else {
+            textSpan.className = "blank";
+            textSpan.textContent = "(none)";
+          }
+          line.append(labelSpan, textSpan);
+          return line;
+        };
+        context.append(
+          makeContextLine("Previous", selected.previousSentence),
+          makeContextLine("Current", selected.currentSentence)
+        );
+        elements.nbDetail.append(contextLabel, context);
+      }
 
       renderNbAnnotations(selected);
 
@@ -3109,31 +3459,28 @@
       if (neighbors.length === 0) {
         const p = document.createElement("div");
         p.style.cssText = "font-size:0.78rem;color:var(--muted);";
-        p.textContent = "No strong keyword overlap with other notes.";
+        p.textContent = "Not connected to any other note yet.";
         container.appendChild(p);
       } else {
         neighbors.forEach((nb) => {
-          container.appendChild(nbRelatedRow(nb.node, nb.node.concept, nb.words));
+          container.appendChild(nbRelatedRow(nb.node, nb.node.concept, nb.why));
         });
       }
     }
 
     // A clickable link to another note. Built with textContent, since titles
     // and annotations are user-typed and must never be parsed as HTML.
-    function nbRelatedRow(node, heading, words) {
+    function nbRelatedRow(node, heading, why) {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "nb-term-row";
       const text = document.createElement("span");
-      const shares = document.createElement("span");
-      shares.style.cssText = "color:var(--muted);font-family:ui-monospace,monospace;font-size:0.7rem;";
-      shares.textContent = `shares: ${words.join(", ")}`;
-      text.append(heading, document.createElement("br"), shares);
+      const reason = document.createElement("span");
+      reason.style.cssText = "color:var(--muted);font-family:ui-monospace,monospace;font-size:0.7rem;";
+      reason.textContent = why;
+      text.append(heading, document.createElement("br"), reason);
       row.appendChild(text);
-      row.addEventListener("click", () => {
-        state.selectedNoteId = node.id;
-        renderNotebook();
-      });
+      row.addEventListener("click", () => nbSelectNote(node.id, "related_row"));
       return row;
     }
 
@@ -3213,6 +3560,7 @@
         button.addEventListener("click", () => {
           const annotation = nbNewAnnotation(preset);
           note.annotations.push(annotation);
+          logEvent("annotation_added", { noteId: note.id, annotationId: annotation.id, label: preset, depth: 1 });
           renderNotebook();
           // A custom field starts on its label so it can be named first.
           nbFocusAnnotation(preset ? annotation.id : `${annotation.id}-label`);
@@ -3249,6 +3597,7 @@
       aiBadge.title = "Suggested by AI — edit it to make it yours";
       const claimForUser = () => {
         if (annotation.source !== "ai") return;
+        logEvent("ai_annotation_claimed", { noteId: state.selectedNoteId, annotationId: annotation.id, label: annotation.label });
         delete annotation.source;
         aiBadge.remove();
         item.classList.remove("ai");
@@ -3260,7 +3609,10 @@
         annotation.label = labelInput.value.trim();
         text.placeholder = nbAnnotationPlaceholder(annotation);
       });
-      labelInput.addEventListener("change", nbCommitEdit);
+      labelInput.addEventListener("change", () => {
+        logEvent("annotation_label_edited", { noteId: state.selectedNoteId, annotationId: annotation.id, label: annotation.label, depth });
+        nbCommitEdit();
+      });
 
       const addChild = document.createElement("button");
       addChild.type = "button";
@@ -3271,6 +3623,7 @@
         claimForUser();
         const child = nbNewAnnotation("");
         annotation.children.push(child);
+        logEvent("annotation_added", { noteId: state.selectedNoteId, annotationId: child.id, parentId: annotation.id, label: "", depth: depth + 1 });
         renderNotebook();
         nbFocusAnnotation(`${child.id}-label`);
       });
@@ -3285,6 +3638,14 @@
         if (annotation.children.length > 0
           && !window.confirm("Remove this item and everything nested under it?")) return;
         siblings.splice(siblings.indexOf(annotation), 1);
+        logEvent("annotation_removed", {
+          noteId: state.selectedNoteId,
+          annotationId: annotation.id,
+          label: annotation.label,
+          depth,
+          wasAiSuggestion: annotation.source === "ai",
+          nestedItems: annotation.children.length
+        });
         renderNotebook();
       });
 
@@ -3303,7 +3664,10 @@
         claimForUser();
         annotation.text = text.value;
       });
-      text.addEventListener("change", nbCommitEdit);
+      text.addEventListener("change", () => {
+        logEvent("annotation_text_edited", { noteId: state.selectedNoteId, annotationId: annotation.id, label: annotation.label, length: annotation.text.length, depth });
+        nbCommitEdit();
+      });
 
       item.append(head, text);
 
@@ -3332,7 +3696,8 @@
          run; editing one (or nesting under it) makes it the user's, and it
          is kept from then on.
        - A title is only replaced while it's still the default "Capture N".
-       - Limited to NB_CLAUDE_REFINE_LIMIT runs per browser.
+       - Limited to NB_CLAUDE_REFINE_LIMIT runs per browser, unless the
+         local config below lifts the limit.
 
        Fires only on an explicit click. */
 
@@ -3340,6 +3705,31 @@
     const NB_CLAUDE_REFINE_LIMIT = 5;
     const NB_CLAUDE_REFINES_USED_KEY = "nb_claude_refines_used";
     const NB_CLAUDE_BATCH_SIZE = 20;
+
+    /* --- Local developer config ---
+       Optional local-config.json next to this file, e.g.
+         { "unlimitedRefines": true }
+       It's gitignored, so it never reaches GitHub Pages, and it's only
+       requested at all when the page is served from this machine
+       (localhost / 127.0.0.1, e.g. VS Code Live Server). */
+
+    const NB_LOCAL_CONFIG_FILE = "local-config.json";
+    const NB_IS_LOCALHOST = ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+    let nbLocalConfig = {};
+
+    async function nbLoadLocalConfig() {
+      if (!NB_IS_LOCALHOST) return;
+      try {
+        const response = await fetch(NB_LOCAL_CONFIG_FILE, { cache: "no-store" });
+        if (response.ok) nbLocalConfig = await response.json();
+      } catch (error) {
+        console.warn(`[notebook] ignoring unreadable ${NB_LOCAL_CONFIG_FILE}:`, error);
+      }
+    }
+
+    function nbUnlimitedRefines() {
+      return nbLocalConfig?.unlimitedRefines === true;
+    }
 
     /* --- API key ---
        Read from ai-key.json next to this file: { "version": 1, "key": "<encoded>" },
@@ -3400,8 +3790,26 @@ For each note you're given, return:
 - keywords: 2–5 key concepts as short lowercase phrases. Notes about the same concept must get the exact same keyword string so they can be linked; reuse strings from the provided keyword vocabulary whenever one fits instead of inventing a near-synonym. Skip keywords so broad they'd fit every note (such as the subject's name) — they'd link everything to everything.
 - ideas: 1–3 short ideas that build on the note — an implication, a link to another note, or a question worth exploring.
 - explanation: 1–3 plain sentences explaining the note's concept to a first-year student.
+- termDefinitions: one entry for every keyword the note will have — the student's own (from Keyword or Tag annotations) and the ones you return in keywords — defining that term in 1–2 plain sentences as it's used in this note, not as a generic dictionary entry. Use the term string exactly as written.
+- topic: the single topic this note belongs to, as a short name (1–4 words). Topics group the notebook into clusters, so notes on the same topic must get exactly the same topic string — reuse a name from the provided topic list whenever one fits. Aim for topics that each gather a few notes: not so broad that every note shares one (such as the subject's name), not so narrow that every note gets its own.
+- links: the other notes this note is meaningfully related to, chosen from the whole notebook index (not only the notes in this request) — the same idea, a cause or effect, an example of it, a contrast, or one building on the other. For each: id (from the index; never the note's own id), strength (1 = loosely related, 2 = clearly related, 3 = closely related or the same idea), and reason (a short phrase, at most 12 words, saying how they relate). Only include real relationships — an empty list is fine, and a few strong links beat many weak ones.
+
+Notes — both the ones to refine and the entries in the notebook index — may include sentenceContext: the sentence the speaker was saying when the student captured (currentSentence) and the one before it (previousSentence). Use it to understand what the captured text refers to and to correct recognition errors, and use it when choosing topics and judging links, since a short captured fragment can be ambiguous on its own. Keep each note's title, keywords, ideas and explanation focused on its captured text.
 
 Write in the same language as the note's captured text. Build on the student's own annotations rather than repeating them. Return exactly one entry per note id.`;
+
+    const NB_TERM_DEFINITIONS_SCHEMA = {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["term", "definition"],
+        properties: {
+          term: { type: "string" },
+          definition: { type: "string" }
+        }
+      }
+    };
 
     const NB_CLAUDE_RESPONSE_SCHEMA = {
       type: "object",
@@ -3413,13 +3821,28 @@ Write in the same language as the note's captured text. Build on the student's o
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["id", "suggestedTitle", "keywords", "ideas", "explanation"],
+            required: ["id", "suggestedTitle", "keywords", "ideas", "explanation", "termDefinitions", "topic", "links"],
             properties: {
               id: { type: "string" },
               suggestedTitle: { type: "string" },
               keywords: { type: "array", items: { type: "string" } },
               ideas: { type: "array", items: { type: "string" } },
-              explanation: { type: "string" }
+              explanation: { type: "string" },
+              termDefinitions: NB_TERM_DEFINITIONS_SCHEMA,
+              topic: { type: "string" },
+              links: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["id", "strength", "reason"],
+                  properties: {
+                    id: { type: "string" },
+                    strength: { type: "integer", enum: [1, 2, 3] },
+                    reason: { type: "string" }
+                  }
+                }
+              }
             }
           }
         }
@@ -3437,16 +3860,50 @@ Write in the same language as the note's captured text. Build on the student's o
     }
 
     function nbNotePayload(note) {
-      return {
+      const payload = {
         id: note.id,
         title: nbIsDefaultTitle(note) ? "" : note.concept,
         capturedText: note.phrase,
         studentAnnotations: nbUserAnnotations(note.annotations)
       };
+      if (note.currentSentence !== undefined) {
+        payload.sentenceContext = {
+          previousSentence: note.previousSentence || "",
+          currentSentence: note.currentSentence || ""
+        };
+      }
+      return payload;
     }
 
     function nbKeywordVocabulary(notes) {
       return [...new Set(notes.flatMap((n) => [...nbUserKeywords(n.annotations)]))];
+    }
+
+    function nbTopicVocabulary(notes) {
+      return [...new Set(notes.map((n) => n.topic).filter(Boolean))];
+    }
+
+    const nbTrim = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+    // Every note in the notebook, briefly, so each batch can link its notes
+    // to notes in other batches — including each note's sentence context,
+    // so links are judged on what was actually being said, not just the
+    // captured fragment. Text is trimmed to keep this small.
+    function nbNotebookIndex(notes) {
+      return notes.map((n) => {
+        const entry = {
+          id: n.id,
+          title: nbIsDefaultTitle(n) ? "" : n.concept,
+          capturedText: nbTrim(n.phrase, 200)
+        };
+        if (n.currentSentence !== undefined) {
+          entry.sentenceContext = {
+            previousSentence: nbTrim(n.previousSentence || "", 150),
+            currentSentence: nbTrim(n.currentSentence || "", 150)
+          };
+        }
+        return entry;
+      });
     }
 
     // Pairs of notes with any link, and clusters of 2+ — for the before/after
@@ -3457,11 +3914,11 @@ Write in the same language as the note's captured text. Build on the student's o
       notes.forEach((a) => notes.forEach((b) => {
         if (a.id < b.id && sharedCounts[a.id][b.id] >= 1) links += 1;
       }));
-      const clusters = nbComputeClusters(notes, sharedCounts, 2).filter((g) => g.length > 1).length;
+      const clusters = nbClusterNotes(notes, sharedCounts).filter((g) => g.length > 1).length;
       return { links, clusters };
     }
 
-    function nbApplyRefinement(note, result) {
+    function nbApplyRefinement(note, result, noteIds) {
       // Untouched AI suggestions from an earlier run are replaced, not stacked.
       note.annotations = note.annotations.filter((a) => a.source !== "ai");
 
@@ -3483,6 +3940,26 @@ Write in the same language as the note's captured text. Build on the student's o
       add("Keyword", keywords.join(", "));
       result.ideas.forEach((idea) => add("Idea", idea));
       add("Explanation", result.explanation);
+      nbSetTermDefinitions(note, result.termDefinitions);
+
+      // Topic and links are the AI's latest judgement, replaced each run.
+      note.topic = normaliseWhitespace(result.topic) || undefined;
+      note.aiLinks = nbSanitizeAiLinks(result.links, note.id, noteIds);
+    }
+
+    // Keeps only links to other notes that exist, one per target (the
+    // strongest), with a valid strength.
+    function nbSanitizeAiLinks(links, ownId, noteIds) {
+      const byTarget = new Map();
+      (Array.isArray(links) ? links : []).forEach((link) => {
+        if (!link || typeof link.id !== "string" || link.id === ownId || !noteIds.has(link.id)) return;
+        const strength = Number(link.strength);
+        if (![1, 2, 3].includes(strength)) return;
+        const reason = typeof link.reason === "string" ? normaliseWhitespace(link.reason) : "";
+        const existing = byTarget.get(link.id);
+        if (!existing || strength > existing.strength) byTarget.set(link.id, { id: link.id, strength, reason });
+      });
+      return [...byTarget.values()];
     }
 
     let nbClaudeRefinesUsedFallback = 0;
@@ -3496,6 +3973,8 @@ Write in the same language as the note's captured text. Build on the student's o
     }
 
     function nbCountClaudeRefine() {
+      // Local unlimited runs don't eat into the browser's normal allowance.
+      if (nbUnlimitedRefines()) return;
       const used = nbClaudeRefinesUsed() + 1;
       nbClaudeRefinesUsedFallback = used;
       try {
@@ -3506,10 +3985,17 @@ Write in the same language as the note's captured text. Build on the student's o
     }
 
     function nbClaudeRefinesLeft() {
+      if (nbUnlimitedRefines()) return Infinity;
       return Math.max(0, NB_CLAUDE_REFINE_LIMIT - nbClaudeRefinesUsed());
     }
 
-    async function nbRequestClaudeRefinement(apiKey, batch, vocabulary) {
+    async function nbRequestClaudeRefinement(apiKey, batch, notes) {
+      const content = [
+        `Keyword vocabulary already in use: ${JSON.stringify(nbKeywordVocabulary(notes))}`,
+        `Topics already in use: ${JSON.stringify(nbTopicVocabulary(notes))}`,
+        `Notebook index (every note, for links):\n${JSON.stringify(nbNotebookIndex(notes))}`,
+        `Notes to refine:\n${JSON.stringify(batch.map(nbNotePayload), null, 2)}`
+      ].join("\n\n");
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -3525,10 +4011,7 @@ Write in the same language as the note's captured text. Build on the student's o
           output_config: {
             format: { type: "json_schema", schema: NB_CLAUDE_RESPONSE_SCHEMA }
           },
-          messages: [{
-            role: "user",
-            content: `Keyword vocabulary already in use: ${JSON.stringify(vocabulary)}\n\nNotes:\n${JSON.stringify(batch.map(nbNotePayload), null, 2)}`
-          }]
+          messages: [{ role: "user", content }]
         })
       });
 
@@ -3540,6 +4023,14 @@ Write in the same language as the note's captured text. Build on the student's o
       }
 
       const data = await response.json();
+      // Actual spend, for checking cost estimates (Haiku 4.5: $1 / $5 per
+      // million input / output tokens).
+      if (data.usage) {
+        const { input_tokens: inputTokens, output_tokens: outputTokens } = data.usage;
+        const cost = (inputTokens * 1 + outputTokens * 5) / 1e6;
+        logEvent("ai_refine_request", { notes: batch.length, inputTokens, outputTokens, costUsd: Number(cost.toFixed(5)), stopReason: data.stop_reason });
+        console.info(`[notebook] refine request: ${batch.length} notes · ${inputTokens} input + ${outputTokens} output tokens ≈ $${cost.toFixed(4)}`);
+      }
       if (data.stop_reason === "refusal") throw new Error("Claude declined to refine these notes.");
       if (data.stop_reason === "max_tokens") throw new Error("The response was cut off — try again with fewer notes.");
 
@@ -3553,6 +4044,7 @@ Write in the same language as the note's captured text. Build on the student's o
     }
 
     function nbRefinesLeftText() {
+      if (nbUnlimitedRefines()) return `unlimited refines (${NB_LOCAL_CONFIG_FILE})`;
       return `${nbClaudeRefinesLeft()} of ${NB_CLAUDE_REFINE_LIMIT} refines left in this browser`;
     }
 
@@ -3561,10 +4053,12 @@ Write in the same language as the note's captured text. Build on the student's o
       if (notes.length === 0) return;
 
       if (nbClaudeRefinesLeft() === 0) {
+        logEvent("ai_refine_blocked", { reason: "limit_reached" });
         nbSetAiStatus(`All ${NB_CLAUDE_REFINE_LIMIT} refines for this browser have been used.`, true);
         return;
       }
 
+      logEvent("ai_refine_started", { notes: notes.length });
       elements.nbRefineButton.disabled = true;
       elements.nbRefineButton.textContent = "Refining…";
 
@@ -3573,6 +4067,7 @@ Write in the same language as the note's captured text. Build on the student's o
         apiKey = await nbLoadApiKey();
       } catch (error) {
         console.error("[notebook] could not load the API key:", error);
+        logEvent("ai_refine_failed", { status: null, message: "API key file could not be loaded" });
         nbSetAiStatus(`Couldn't load ${NB_KEY_FILE} — make sure it's next to this page and the folder is served (e.g. python -m http.server), not opened as a file.`, true);
         elements.nbRefineButton.disabled = false;
         elements.nbRefineButton.textContent = "✨ Refine with AI";
@@ -3587,27 +4082,37 @@ Write in the same language as the note's captured text. Build on the student's o
           const batch = notes.slice(start, start + NB_CLAUDE_BATCH_SIZE);
           nbSetAiStatus(`Refining notes ${start + 1}–${start + batch.length} of ${notes.length}…`);
 
-          const results = await nbRequestClaudeRefinement(apiKey, batch, nbKeywordVocabulary(notes));
+          const results = await nbRequestClaudeRefinement(apiKey, batch, notes);
           // One refine is used up once a request has actually succeeded —
           // a rejected key or a network failure doesn't count.
           if (!counted) {
             nbCountClaudeRefine();
             counted = true;
           }
-          // A new session replaced the notes while this was in flight.
+          // The notes were replaced (a notebook was opened, or the first
+          // real capture replaced the samples) while this was in flight.
           if (state.notes !== notes) return;
 
+          const noteIds = new Set(notes.map((n) => n.id));
           results.forEach((result) => {
             const note = batch.find((n) => n.id === result.id);
-            if (note) nbApplyRefinement(note, result);
+            if (note) nbApplyRefinement(note, result, noteIds);
           });
           renderNotebook();
         }
 
         const after = nbGraphStats(notes);
+        logEvent("ai_refine_completed", {
+          notes: notes.length,
+          linksBefore: before.links,
+          linksAfter: after.links,
+          clustersBefore: before.clusters,
+          clustersAfter: after.clusters
+        });
         nbSetAiStatus(`Refined ${notes.length} note${notes.length === 1 ? "" : "s"} · links ${before.links} → ${after.links} · clusters ${before.clusters} → ${after.clusters} · ${nbRefinesLeftText()}`);
       } catch (error) {
         console.error("[notebook] AI refinement failed:", error);
+        logEvent("ai_refine_failed", { status: error.status ?? null, message: error.message });
         nbSetAiStatus(error.status === 401
           ? `The API key in ${NB_KEY_FILE} was rejected — it may be wrong or revoked.`
           : `Refinement stopped: ${error.message}`, true);
@@ -3620,37 +4125,265 @@ Write in the same language as the note's captured text. Build on the student's o
 
     elements.nbRefineButton.addEventListener("click", nbRefineAll);
 
+    /* ---------- Saving and reopening a notebook ----------
+       Like a USB stick: "Download notebook" writes every note (text,
+       title, annotations, AI suggestions, sentence context, timing) to a
+       JSON file, and "Open notebook" loads such a file back — no capture
+       session needed. Captures from later sessions are added to whatever
+       notebook is open. */
+
+    const NB_FILE_FORMAT = "proto-v4-notebook";
+    // 2 added interactionLog / interactionSummary and per-note capture records.
+    const NB_FILE_VERSION = 2;
+
+    // Quick overview of the log for analysis; the full detail is in
+    // interactionLog itself.
+    function nbInteractionSummary(log) {
+      const byType = {};
+      const sessions = {};
+      log.forEach((e) => {
+        byType[e.type] = (byType[e.type] || 0) + 1;
+        const s = (sessions[e.session] ||= { session: e.session, firstEventAt: e.t, lastEventAt: e.t, events: 0 });
+        s.events += 1;
+        if (e.t < s.firstEventAt) s.firstEventAt = e.t;
+        if (e.t > s.lastEventAt) s.lastEventAt = e.t;
+      });
+      return {
+        events: log.length,
+        sessions: Object.values(sessions).sort((a, b) => a.firstEventAt.localeCompare(b.firstEventAt)),
+        byType
+      };
+    }
+
+    function nbHasUnsavedChanges() {
+      return !state.usingSampleNotes
+        && state.notes.length > 0
+        && JSON.stringify(state.notes) !== state.nbSavedJson;
+    }
+
+    function nbDownloadNotebook() {
+      if (state.usingSampleNotes || state.notes.length === 0) return;
+      // Logged first, so the download itself is part of the saved log.
+      logEvent("notebook_downloaded", { notes: state.notes.length });
+      const file = {
+        format: NB_FILE_FORMAT,
+        version: NB_FILE_VERSION,
+        savedAt: new Date().toISOString(),
+        notes: state.notes,
+        interactionSummary: nbInteractionSummary(state.interactionLog),
+        interactionLog: state.interactionLog
+      };
+      downloadBlob(
+        new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }),
+        `notebook-${timestampForFilename()}.json`
+      );
+      state.nbSavedJson = JSON.stringify(state.notes);
+      nbSetAiStatus(`Downloaded ${state.notes.length} note${state.notes.length === 1 ? "" : "s"}. Use “Open notebook” to continue from this file later.`);
+    }
+
+    const nbString = (value, fallback = "") => (typeof value === "string" ? value : fallback);
+
+    // Saved files may have been hand-edited, so the fields the views rely
+    // on are checked and defaulted. Everything is later rendered as text,
+    // never HTML. Unknown fields are kept as they are.
+    function nbSanitizeAnnotations(list) {
+      if (!Array.isArray(list)) return [];
+      return list
+        .filter((a) => a && typeof a === "object")
+        .map((a) => ({
+          ...a,
+          id: nbString(a.id) || nbNewAnnotation("").id,
+          label: nbString(a.label),
+          text: nbString(a.text),
+          children: nbSanitizeAnnotations(a.children)
+        }));
+    }
+
+    function nbSanitizeNote(raw, index) {
+      if (!raw || typeof raw !== "object" || typeof raw.id !== "string" || !raw.id) {
+        throw new Error(`note ${index + 1} is missing its id`);
+      }
+      const elapsedS = Number.isFinite(raw.elapsedS) ? Math.max(0, raw.elapsedS) : 0;
+      const phrase = nbString(raw.phrase);
+      return {
+        ...raw,
+        elapsedS,
+        timeLabel: nbString(raw.timeLabel, nbFormatElapsed(elapsedS)),
+        concept: nbString(raw.concept) || "Untitled note",
+        phrase,
+        originalPhrase: nbString(raw.originalPhrase, phrase),
+        annotations: nbSanitizeAnnotations(raw.annotations),
+        termDefinitions: (Array.isArray(raw.termDefinitions) ? raw.termDefinitions : [])
+          .filter((d) => d && typeof d.term === "string" && typeof d.definition === "string")
+          .map((d) => ({ term: d.term, definition: d.definition })),
+        topic: nbString(raw.topic) || undefined
+        // aiLinks are checked in nbParseNotebookFile, once every id is known.
+      };
+    }
+
+    function nbParseNotebookFile(text) {
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (error) {
+        throw new Error("it isn't valid JSON");
+      }
+      if (data?.format !== NB_FILE_FORMAT || !Array.isArray(data.notes)) {
+        throw new Error("it isn't a notebook downloaded from this app");
+      }
+      if (data.version > NB_FILE_VERSION) {
+        throw new Error("it was saved by a newer version of this app");
+      }
+      const notes = data.notes.map(nbSanitizeNote);
+      const noteIds = new Set(notes.map((n) => n.id));
+      if (noteIds.size !== notes.length) {
+        throw new Error("two notes share the same id");
+      }
+      // A note keeps aiLinks only if it had them (i.e. it was refined), so
+      // unrefined notes still fall back to word overlap.
+      notes.forEach((note) => {
+        if (Array.isArray(note.aiLinks)) note.aiLinks = nbSanitizeAiLinks(note.aiLinks, note.id, noteIds);
+        else delete note.aiLinks;
+      });
+      // Files from before version 2 have no log; entries are kept as saved
+      // as long as they have the basic shape.
+      const log = (Array.isArray(data.interactionLog) ? data.interactionLog : [])
+        .filter((e) => e && typeof e === "object" && typeof e.type === "string" && typeof e.t === "string");
+      return { notes, log };
+    }
+
+    // New annotations must not reuse an id from the opened file.
+    function nbBumpAnnotationCounter(notes) {
+      const visit = (list) => list.forEach((a) => {
+        const n = Number(/^a(\d+)$/.exec(a.id)?.[1]);
+        if (n > nbAnnotationCounter) nbAnnotationCounter = n;
+        visit(a.children);
+      });
+      notes.forEach((note) => visit(note.annotations));
+    }
+
+    async function nbOpenNotebookFile(file) {
+      let notes;
+      let log;
+      try {
+        ({ notes, log } = nbParseNotebookFile(await file.text()));
+      } catch (error) {
+        logEvent("notebook_open_failed", { fileName: file.name, message: error.message });
+        nbSetAiStatus(`Couldn't open ${file.name}: ${error.message}.`, true);
+        return;
+      }
+
+      nbBumpAnnotationCounter(notes);
+      // The log belongs to the notebook, so it's replaced by the file's.
+      // This visit's events so far carry over only if no real notebook was
+      // open yet (just the sample notes) — otherwise they belong to the
+      // notebook being replaced.
+      state.interactionLog = [...log, ...(state.usingSampleNotes ? state.interactionLog : [])];
+      // A new array, so an AI refinement still in flight for the previous
+      // notebook sees the swap and drops its results.
+      state.notes = notes;
+      state.usingSampleNotes = false;
+      state.selectedNoteId = notes[0]?.id ?? null;
+      state.nbActiveBin = null;
+      state.nbSavedJson = JSON.stringify(notes);
+      logEvent("notebook_opened", { fileName: file.name, notes: notes.length, priorLogEvents: log.length });
+      renderNotebook();
+      nbSetAiStatus(`Opened ${file.name} — ${notes.length} note${notes.length === 1 ? "" : "s"}. New captures will be added to this notebook.`);
+    }
+
+    elements.nbDownloadButton.addEventListener("click", nbDownloadNotebook);
+
+    elements.nbOpenButton.addEventListener("click", () => {
+      if (state.shouldListen || state.recognitionActive) {
+        nbSetAiStatus("Stop recognition before opening a notebook.", true);
+        return;
+      }
+      if (nbHasUnsavedChanges()
+        && !window.confirm("Opening a notebook replaces the current notes, which haven't been downloaded since your last change. Continue?")) {
+        return;
+      }
+      elements.nbOpenInput.click();
+    });
+
+    elements.nbOpenInput.addEventListener("change", () => {
+      const file = elements.nbOpenInput.files[0];
+      // Cleared so choosing the same file again still fires "change".
+      elements.nbOpenInput.value = "";
+      if (file) nbOpenNotebookFile(file);
+    });
+
+    window.addEventListener("beforeunload", (event) => {
+      if (!nbHasUnsavedChanges()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
     elements.navCaptureButton.addEventListener("click", () => {
+      if (!elements.captureScreen.hidden) return;
       elements.captureScreen.hidden = false;
       elements.notebookScreen.hidden = true;
       elements.navCaptureButton.setAttribute("aria-pressed", "true");
       elements.navNotebookButton.setAttribute("aria-pressed", "false");
+      logEvent("screen_changed", { to: "capture" });
     });
 
     elements.navNotebookButton.addEventListener("click", () => {
+      if (!elements.notebookScreen.hidden) return;
       elements.captureScreen.hidden = true;
       elements.notebookScreen.hidden = false;
       elements.navCaptureButton.setAttribute("aria-pressed", "false");
       elements.navNotebookButton.setAttribute("aria-pressed", "true");
+      logEvent("screen_changed", { to: "notebook", notes: state.notes.length, sampleNotes: state.usingSampleNotes });
       renderNotebook();
     });
 
     document.getElementById("nbTabs").addEventListener("click", (event) => {
       const btn = event.target.closest(".nb-tab");
       if (!btn) return;
+      if (btn.dataset.view !== state.notebookView) {
+        logEvent("notebook_view_changed", { from: state.notebookView, to: btn.dataset.view });
+      }
       state.notebookView = btn.dataset.view;
       state.nbActiveBin = null;
       document.querySelectorAll(".nb-tab").forEach((el) => el.setAttribute("aria-pressed", String(el === btn)));
       renderNotebook();
     });
 
+    // Search is logged once typing pauses, not per keystroke.
+    let nbSearchLogTimer = null;
     elements.nbSearchInput.addEventListener("input", (event) => {
       state.notebookQuery = event.target.value;
       renderNotebook();
+      window.clearTimeout(nbSearchLogTimer);
+      nbSearchLogTimer = window.setTimeout(() => {
+        logEvent("notebook_searched", {
+          query: state.notebookQuery,
+          matches: state.notes.filter((n) => nbMatches(n, state.notebookQuery)).length
+        });
+      }, 800);
+    });
+
+    // Time away from the app (switching tabs/windows) matters for reading
+    // engagement and capture timing.
+    document.addEventListener("visibilitychange", () => {
+      logEvent(document.hidden ? "page_hidden" : "page_visible");
+    });
+
+    logEvent("app_loaded", {
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      speechRecognitionSupported: Boolean(SpeechRecognition),
+      translatorApiSupported: "Translator" in window,
+      secureContext: window.isSecureContext,
+      host: window.location.hostname
     });
 
     renderNotebook();
     nbSetAiStatus(`Refine uses Claude Haiku · ${nbRefinesLeftText()}.`);
+    nbLoadLocalConfig().then(() => {
+      if (nbUnlimitedRefines()) nbSetAiStatus(`Refine uses Claude Haiku · ${nbRefinesLeftText()}.`);
+    });
   </script>
 </body>
 </html>

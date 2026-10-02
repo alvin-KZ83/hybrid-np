@@ -1,2 +1,6 @@
 # Raw API key, only used briefly to generate ai-key.json — never commit.
 key.txt
+
+# Local-only developer settings (e.g. unlimited AI refines) — read only
+# when the app is served from localhost; never commit.
+local-config.json
